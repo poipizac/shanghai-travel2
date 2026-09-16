@@ -4,6 +4,7 @@ import altair as alt
 import sqlite3
 import datetime
 import os
+import urllib.parse
 import folium
 from folium.plugins import LocateControl
 from streamlit_folium import st_folium
@@ -22,7 +23,42 @@ st.set_page_config(
 # 2. SQLite 資料庫初始化與操作函式
 # ==========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.path.join(BASE_DIR, "travel2.db")
+DB_FILE = os.path.join(BASE_DIR, "travel.db")
+
+def get_navigation_info(title: str, desc: str = "") -> tuple[float, float, str]:
+    """根據行程標題與內文自動匹配最精準之經緯度座標與目標地標名稱"""
+    combined = f"{title} {desc}"
+    spot_rules = [
+        ("迪士尼", 31.14151, 121.65796, "上海迪士尼度假區"),
+        ("動物城", 31.14151, 121.65796, "上海迪士尼度假區"),
+        ("加勒比海盜", 31.14151, 121.65796, "上海迪士尼度假區"),
+        ("幻影秀", 31.14151, 121.65796, "上海迪士尼度假區"),
+        ("耀雪", 30.89850, 121.92110, "耀雪冰雪世界"),
+        ("滑雪", 30.89850, 121.92110, "耀雪冰雪世界"),
+        ("臨港", 30.91730, 121.90677, "臨港冰雪明城酒店"),
+        ("宮宴", 31.22693, 121.44772, "上海宮宴"),
+        ("漢服", 31.22693, 121.44772, "上海宮宴"),
+        ("武康", 31.20443, 121.43828, "武康大樓"),
+        ("華寶樓", 31.22545, 121.49208, "豫園華寶樓"),
+        ("豫園", 31.22545, 121.49208, "豫園華寶樓"),
+        ("雲南南路", 31.22915, 121.48152, "雲南南路美食街"),
+        ("漫庭", 31.14569, 121.69030, "上海漫庭酒店(國際旅遊度假區店)"),
+        ("周浦", 31.14569, 121.69030, "上海漫庭酒店(國際旅遊度假區店)"),
+        ("金陵東路", 31.23412, 121.49221, "金陵東路渡口"),
+        ("夜景", 31.23412, 121.49221, "金陵東路渡口"),
+        ("輪渡", 31.23412, 121.49221, "金陵東路渡口"),
+        ("浦東機場", 31.14488, 121.81055, "浦東國際機場T2"),
+        ("磁浮", 31.14488, 121.81055, "浦東國際機場T2"),
+        ("長榮", 31.14488, 121.81055, "浦東國際機場T2"),
+        ("機場", 31.14488, 121.81055, "浦東國際機場T2"),
+        ("龍陽路", 31.20371, 121.55776, "龍陽路地鐵站"),
+    ]
+    for kw, lat, lon, name in spot_rules:
+        if kw in combined:
+            return lat, lon, name
+            
+    fallback_name = title.split("】")[-1].split("➔")[0].strip() or "上海市"
+    return 31.2304, 121.4737, fallback_name
 
 def get_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -527,6 +563,18 @@ with tabs[0]:
             if node['tip']:
                 st.warning(f"{node['tip']}")
 
+            # 導航按鈕 (高德導航與 Google 地圖)
+            lat, lon, spot_name = get_navigation_info(node['title'], node['desc'] or "")
+            encoded_name = urllib.parse.quote(spot_name)
+            amap_url = f"https://uri.amap.com/marker?position={lon},{lat}&name={encoded_name}"
+            gmaps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            
+            nav_col1, nav_col2 = st.columns(2)
+            with nav_col1:
+                st.link_button("🗺️ 開啟高德導航", amap_url, use_container_width=True, help=f"前往高德地圖導航至：{spot_name}")
+            with nav_col2:
+                st.link_button("🌐 Google 地圖", gmaps_url, use_container_width=True, help=f"在 Google 地圖查看：{spot_name}")
+
     with st.expander(f"➕ 為 Day {day_select} 新增行程節點"):
         with st.form(f"add_node_form_{day_select}", clear_on_submit=True):
             col_a, col_b = st.columns([1, 2])
@@ -855,4 +903,4 @@ with tabs[4]:
             st.rerun()
 
 st.divider()
-st.caption("上海 4 天 3 夜夢幻之旅 ｜ SQLite travel2.db 即時驅動 ｜ 響應式 Mobile Friendly 原生架構")
+st.caption("上海 4 天 3 夜夢幻之旅 ｜ SQLite travel.db 即時驅動 ｜ 響應式 Mobile Friendly 原生架構")
