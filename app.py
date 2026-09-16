@@ -588,23 +588,58 @@ with tabs[0]:
     
     for node in day_nodes:
         with st.container(border=True):
-            st.markdown(f"**⏰ {node['time_slot']}** ｜ `{node['tag'] if node['tag'] else '精選行程'}`")
-            st.markdown(f"#### {node['title']}")
-            st.markdown(node['desc'])
-            if node['transit']:
-                st.info(f"🚇 **推薦交通：** {node['transit']}")
-            if node['tip']:
-                st.warning(f"{node['tip']}")
+            # 1. 標頭排版：時間區段膠囊徽章與核心標題
+            h_col1, h_col2 = st.columns([3, 1])
+            with h_col1:
+                st.markdown(f"### 📍 {node['title']}")
+            with h_col2:
+                st.markdown(
+                    f"<div style='text-align: right; padding-top: 4px;'>"
+                    f"<span style='background: rgba(14, 165, 233, 0.15); color: #0284c7; padding: 5px 12px; border-radius: 20px; font-size: 13px; font-weight: bold; border: 1px solid rgba(14, 165, 233, 0.35);'>"
+                    f"⏰ {node['time_slot']}</span></div>", 
+                    unsafe_allow_html=True
+                )
+            
+            if node['tag']:
+                st.caption(f"🏷️ **行程主題標籤：** `{node['tag']}`")
+            
+            st.divider()
 
-            # 手機原生 App 導航按鈕 (URI Scheme 專屬協定與備援)
+            # 2. 結構化區塊：交通方式
+            if node['transit']:
+                st.markdown(
+                    f"<div style='background: rgba(59, 130, 246, 0.08); border-left: 4px solid #3b82f6; padding: 9px 14px; border-radius: 6px; margin: 8px 0;'>"
+                    f"<strong style='color: #2563eb;'>🚇 推薦交通方式：</strong>"
+                    f"<span>{node['transit']}</span></div>",
+                    unsafe_allow_html=True
+                )
+
+            # 3. 結構化區塊：操作細節與攻略步驟 (條列清單)
+            st.markdown("**📋 操作細節與重要步驟：**")
+            desc_lines = [line.strip() for line in (node['desc'] or "").split("\n") if line.strip()]
+            for line in desc_lines:
+                clean_line = line.lstrip("•").lstrip("-").strip()
+                st.markdown(f"- {clean_line}")
+
+            # 4. 貼心建議與避坑指南
+            if node['tip']:
+                tip_clean = node['tip'].lstrip("💡").strip()
+                st.markdown(
+                    f"<div style='background: rgba(245, 158, 11, 0.10); border-left: 4px solid #f59e0b; padding: 9px 14px; border-radius: 6px; margin: 10px 0 14px 0;'>"
+                    f"<strong style='color: #d97706;'>💡 貼心提醒＆避坑注意：</strong>"
+                    f"<span>{tip_clean}</span></div>",
+                    unsafe_allow_html=True
+                )
+
+            # 5. 手機原生 App 導航按鈕 (URI Scheme 專屬協定與備援)
             lat, lon, spot_name = get_navigation_info(node['title'], node['desc'] or "")
             encoded_name = urllib.parse.quote(spot_name)
             
-            # 1. 手機專用協定 (URI Scheme：手機點擊直接嘗試喚起對應的原生導航 App)
+            # 手機專用協定 (URI Scheme)
             amap_app_url = f"amapuri://route/plan/?dlat={lat}&dlon={lon}&dname={encoded_name}&dev=0&t=0"
             gmaps_app_url = f"comgooglemaps://?q={lat},{lon}&zoom=15"
             
-            # 2. 網頁版備援連結 (若未安裝原生 App 或電腦端瀏覽時自動備援)
+            # 網頁版備援連結
             amap_web_url = f"https://uri.amap.com/marker?position={lon},{lat}&name={encoded_name}"
             gmaps_web_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
             
