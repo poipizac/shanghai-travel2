@@ -22,7 +22,7 @@ st.set_page_config(
 # 2. SQLite 資料庫初始化與操作函式
 # ==========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.path.join(BASE_DIR, "travel.db")
+DB_FILE = os.path.join(BASE_DIR, "travel2.db")
 
 def get_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -855,4 +855,4 @@ with tabs[4]:
             st.rerun()
 
 st.divider()
-st.caption("上海 4 天 3 夜夢幻之旅 ｜ SQLite travel.db 即時驅動 ｜ 響應式 Mobile Friendly 原生架構")
+st.caption("上海 4 天 3 夜夢幻之旅 ｜ SQLite travel2.db 即時驅動 ｜ 響應式 Mobile Friendly 原生架構")
