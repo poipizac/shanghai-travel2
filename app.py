@@ -25,46 +25,7 @@ st.set_page_config(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "travel.db")
 
-def get_navigation_info(title: str, desc: str = "") -> tuple[float, float, str]:
-    """根據行程標題與內文自動匹配最精準之經緯度座標與目標地標名稱"""
-    spot_rules = [
-        ("迪士尼", 31.14151, 121.65796, "上海迪士尼度假區"),
-        ("動物城", 31.14151, 121.65796, "上海迪士尼度假區"),
-        ("加勒比海盜", 31.14151, 121.65796, "上海迪士尼度假區"),
-        ("幻影秀", 31.14151, 121.65796, "上海迪士尼度假區"),
-        ("臨港冰雪明城", 30.91730, 121.90677, "臨港冰雪明城酒店"),
-        ("臨港", 30.91730, 121.90677, "臨港冰雪明城酒店"),
-        ("耀雪", 30.89850, 121.92110, "耀雪冰雪世界"),
-        ("滑雪", 30.89850, 121.92110, "耀雪冰雪世界"),
-        ("宮宴", 31.22693, 121.44772, "上海宮宴"),
-        ("漢服", 31.22693, 121.44772, "上海宮宴"),
-        ("武康", 31.20443, 121.43828, "武康大樓"),
-        ("華寶樓", 31.22545, 121.49208, "豫園華寶樓"),
-        ("豫園", 31.22545, 121.49208, "豫園華寶樓"),
-        ("雲南南路", 31.22915, 121.48152, "雲南南路美食街"),
-        ("漫庭", 31.14569, 121.69030, "上海漫庭酒店(國際旅遊度假區店)"),
-        ("周浦", 31.14569, 121.69030, "上海漫庭酒店(國際旅遊度假區店)"),
-        ("金陵東路", 31.23412, 121.49221, "金陵東路渡口"),
-        ("夜景", 31.23412, 121.49221, "金陵東路渡口"),
-        ("輪渡", 31.23412, 121.49221, "金陵東路渡口"),
-        ("浦東機場", 31.14488, 121.81055, "浦東國際機場T2"),
-        ("磁浮", 31.14488, 121.81055, "浦東國際機場T2"),
-        ("長榮", 31.14488, 121.81055, "浦東國際機場T2"),
-        ("機場", 31.14488, 121.81055, "浦東國際機場T2"),
-        ("龍陽路", 31.20371, 121.55776, "龍陽路地鐵站"),
-    ]
-    # 優先從標題精確匹配
-    for kw, lat, lon, name in spot_rules:
-        if kw in title:
-            return lat, lon, name
-            
-    # 其次從說明文字匹配
-    for kw, lat, lon, name in spot_rules:
-        if kw in desc:
-            return lat, lon, name
-            
-    fallback_name = title.split("】")[-1].split("➔")[0].strip() or "上海市"
-    return 31.2304, 121.4737, fallback_name
+from itinerary_data import DEFAULT_ITINERARY, get_navigation_info, build_nav_urls
 
 def get_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -208,60 +169,17 @@ def init_db():
         cursor.executemany("INSERT INTO checklist (item_name, is_checked, category) VALUES (?, ?, ?)", default_checklist)
         conn.commit()
 
-    # 預填行程表（若為空）
-    cursor.execute("SELECT COUNT(*) FROM itinerary")
-    if cursor.fetchone()[0] == 0:
-        default_itinerary = [
-            # Day 1
-            (1, "13:20 - 15:30", "【光速卸重】浦東機場 ➔ 磁浮列車 ➔ 龍陽路站寄存行李", "磁浮體驗 & 輕裝就緒",
-             "• 去程航班：春秋航空 9C8952 (11:15 桃園T1起飛 ➔ 13:20 抵達浦東T2)。\n• 浦東機場T2步行至磁浮站，憑登機證享優惠價 40 RMB（7分20秒直達龍陽路站）。\n• 抵達龍陽路後，使用支付寶搜尋「途簡單」或「小鐵寄存」預約站內行李寄存。", "磁懸浮 8分鐘 / 車資 ¥40", "💡 記得保留紙本或電子登機證享磁浮優惠！", 1),
-            (1, "15:30 - 18:30", "【黃金直行線】龍陽路 ➔ 雲南南路美食街 ➔ 金陵東路 ➔ 豫園華寶樓", "聽勸老字號 & 豫園華寶樓",
-             "• 搭地鐵2號線由龍陽路至人民廣場站（約15分鐘），步行5分鐘達雲南南路美食街。\n• 美食推薦：阿寶炸豬排、小紹興白斬雞、大壺春生煎包。\n• 沿金陵東路騎樓步行10分鐘直達豫園華寶樓1F，購買爆紅「裕蓮茶樓 蔥香牛軋萬德福」。", "地鐵 2號線 / 步行", "💡 傍晚剛好能欣賞豫園仿古建築群璀璨亮燈！", 2),
-            (1, "18:30 - 20:30", "聽勸夜景 2 選 1（極順接駁回龍陽路）", "聽勸夜景 2 選 1",
-             "• 選項 A（最推薦）：步行至金陵東路渡口，花 2 元搭乘浦江輪渡至東昌路渡口，江風吹拂欣賞兩岸夜景，接著漫步陸家嘴搭2號線3站直達龍陽路！\n• 選項 B：豫園打車12分鐘至北外灘「白玉蘭廣場」人民咖啡館免費俯瞰高空夜景與東方明珠打卡。", "2元浦江輪渡 或 網約車", "💡 避開外灘核心人擠人觀景台，北外灘視野最乾淨！", 3),
-            (1, "20:45 - 22:00", "【順方向下】龍陽路站取行李 ➔ 臨港冰雪明城酒店", "取行李 ➔ 前往臨港飯店",
-             "• 選擇 1：搭乘地鐵 16 號線（龍陽路為起點站必有座，直達臨港大道站約45-55分鐘，票價約 8 RMB，末班車 22:30）。\n• 選擇 2：龍陽路直接叫滴滴打車直奔臨港（避開市區塞車，約45分鐘車程，約 130-150 RMB）。", "地鐵 16號線 或 滴滴打車", "💡 晚上入住臨港冰雪明城酒店，隔天走路即可到耀雪滑雪！", 4),
-
-            # Day 2
-            (2, "08:30 - 09:00", "「臨港冰雪明城酒店」退房與前台寄存大行李", "退房寄存",
-             "• 早起辦理退房，將行李直接寄存於飯店前台，輕裝前往耀雪冰雪世界。", "步行 / 車程 3 分鐘", "💡 雪場離飯店極近。", 1),
-            (2, "09:15 - 17:45", "「耀雪冰雪世界」世界級室內滑雪暢玩全日 ＆ 園區午餐", "極限冰雪全日",
-             "• 現場領取租借專業雪服與雪鞋，暢玩超大室內滑雪坡道與冰雪娛雪區！\n• 中午於雪場主題餐廳享用午餐與熱飲。", "步行 / 打車", "💡 必備：請自備厚長襪與保暖防寒手套，門票已含雪服與雪靴。", 2),
-            (2, "18:00 - 18:30", "返回臨港飯店領取行李 ➔ 出發前往迪士尼周邊", "取回行李",
-             "• 滑雪結束後返回臨港冰雪明城酒店取回行李，準備轉移住宿陣地。", "步行 / 叫車", "💡 稍微更換乾爽衣物後出發。", 3),
-            (2, "18:30 - 19:30", "抵達「上海漫庭酒店（國際旅遊度假區店）」Check-in", "飯店換會",
-             "• 搭乘網約車直達迪士尼周邊飯店（車程約 40 分鐘），辦理連續兩晚入住。\n• 飯店提供隔天清晨迪士尼樂園免費接駁專車服務。", "網約車（約 110-130 RMB）", "💡 記得先向櫃檯預約隔天早晨前往迪士尼的接駁班次！", 4),
-            (2, "19:30 - 21:00", "周浦特色美食晚餐 ＆ 早點休息儲備體力", "休養生息",
-             "• 於飯店周邊品嚐在地小吃或叫外賣，早點梳洗就寢，為 Day 3 迪士尼全日大挑戰備戰！", "周邊步行", "💡 充足睡眠是暢玩迪士尼的最強武器。", 5),
-
-            # Day 3
-            (3, "07:30 - 08:30", "早起搭接駁車入園 ＆ 綁定上海迪士尼度假區 App", "早起入園",
-             "• 搭乘漫庭飯店免費專車抵達上海迪士尼樂園。\n• 驗票入園第一時間打開 App 綁定門票，搶抽預約熱門項目尊享卡！", "飯店免費接駁專車", "💡 提早抵達安檢口排隊，第一批入園排隊時間至少省一半！", 1),
-            (3, "08:30 - 12:00", "必衝 No.1：瘋狂動物城 (Zootopia) 熱力追蹤 ＆ 創極速光輪", "必衝熱門",
-             "• 直奔全球首座「瘋狂動物城」體驗熱力追蹤，購買經典爪爪冰棒打卡拍照！\n• 前往明日世界挑戰地表最強雲霄飛車「創極速光輪 (TRON)」！", "樂園內部步行", "💡 爪爪棒棒糖拍照超吸睛，園區內拍照細節滿滿！", 2),
-            (3, "13:30 - 17:30", "必衝 No.2：加勒比海盜 ＆ 米奇童話專列大巡遊 ＆ 礦山車", "經典體驗",
-             "• 體驗光影視覺震撼無比的「加勒比海盜——沉落寶藏之戰」！\n• 欣賞米奇童話專列花車巡遊，搭乘七個小矮人礦山車。", "樂園內部", "💡 加勒比海盜是全球迪士尼中科技水準最高的項目之一，必看！", 3),
-            (3, "20:00 - 21:00", "壓軸大秀：奇夢之光幻影秀（城堡璀璨光影煙火秀）", "壓軸大秀",
-             "• 提前在奇幻童話城堡正前方尋找無遮擋視角，欣賞融合水幕、光雕與煙火的夢幻盛宴！\n• 散場後搭乘飯店接駁車返回漫庭酒店休息。", "接駁專車", "💡 建議提前 45 分鐘在奇想花園卡位。", 4),
-
-            # Day 4
-            (4, "09:30 - 10:30", "漫庭酒店退房 ➔ 攜帶行李搭車直奔靜安「宮宴」", "退房啟程",
-             "• 辦理退房，攜帶行李搭網約車前往靜安區「宮宴（上海店）」（車程約 40 分鐘）。\n• 宮宴現場提供大件行李寄存服務，兩手空空用餐逛街超輕鬆。", "網約車（約 100-120 RMB）", "💡 也可以寄存在地鐵靜安寺站行李櫃。", 1),
-            (4, "10:45 - 12:00", "關鍵前置！挑選漢服華服 ＆ 尊榮古風髮型妝造", "漢服換裝妝造",
-             "• ⏰ 開宴前黃金關鍵（12:10 準時開宴）：\n• 宮宴規定開宴前需換裝完畢，挑選華服與髮型梳化約需 50-60 分鐘！\n• 強烈建議於 10:45-11:00 前抵達完成簽到與妝髮造型，在燈籠長廊大拍神仙古風照！", "抵達靜安區北京西路1485號", "💡 專業造型師打造精緻漢服髮型，儀式感拉滿！", 2),
-            (4, "12:10 - 14:30", "【上海宮宴】一菜一演藝・宮廷御宴與國風歌舞沉浸盛宴", "華燈初上・宮廷盛宴",
-             "• 沉浸式品嚐古代皇家宮廷御膳，欣賞絕美舞踏樂曲表演、行酒令與古典互動！\n• 餐後可自由穿著漢服在各場景盡情合影留念。", "宮宴盛宴廳", "💡 沉浸式體驗古代貴族開宴的尊榮禮儀。", 3),
-            (4, "14:30 - 16:30", "換回便服 ➔ 打車至武康路梧桐區漫步（打卡武康大樓）", "市區質感漫步",
-             "• 宮宴距離武康路僅約 3.5 公里（打車約 12 分鐘，車資約 18 RMB）。\n• 漫步於綠意盎然的梧桐樹下，打卡經典歷史地標「武康大樓」，走訪特色文藝小店。", "網約車 / 步行", "💡 感受最道地的上海海派慢節奏浪漫氛圍。", 4),
-            (4, "16:30 - 18:00", "前往上海浦東國際機場 T2 辦理長榮 BR721 登機報到", "前往機場",
-             "• 取回行李搭網約車直達浦東國際機場 T2 航廈（車程約 45-50 分鐘）。\n• 建議 18:00 前抵達（起飛前 2 小時）完成報到托運與出境安檢，逛免稅店採買伴手禮。", "網約車直達機場", "💡 國際航班務必預留足夠通關與安檢時間！", 5),
-            (4, "20:05 - 22:00", "搭乘長榮航空 BR721 班機（立榮 B77017）圓滿返台", "圓滿返台",
-             "• 回程航班：長榮 BR721 (20:05 浦東T2起飛 ➔ 22:00 抵達桃園T2)。\n• 帶著滿滿宮廷御宴、迪士尼歡樂與滑雪美好回憶圓滿結束精彩旅程！", "長榮航班", "💡 班機準時起飛，順利平安返抵台灣！", 6)
-        ]
+    # 預填行程表（對齊高質感網頁版 19 筆完整資料，絕對不影響 members 與 expenses）
+    cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    cursor.execute("SELECT value FROM settings WHERE key = 'itinerary_version'")
+    v_row = cursor.fetchone()
+    if not v_row or v_row[0] != "v2":
+        cursor.execute("DELETE FROM itinerary")
         cursor.executemany("""
             INSERT INTO itinerary (day, time_slot, title, tag, desc, transit, tip, sort_order)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, default_itinerary)
+        """, DEFAULT_ITINERARY)
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('itinerary_version', 'v2')")
         conn.commit()
 
     conn.close()
@@ -618,42 +536,137 @@ with tabs[0]:
                     unsafe_allow_html=True
                 )
 
-            # 3. 結構化區塊：操作細節與攻略步驟 (條列清單)
-            st.markdown("**📋 操作細節與重要步驟：**")
-            desc_lines = [line.strip() for line in (node['desc'] or "").split("\n") if line.strip()]
-            for line in desc_lines:
-                clean_line = line.lstrip("•").lstrip("-").strip()
-                st.markdown(f"- {clean_line}")
+            desc_text = node['desc'] or ""
 
-            # 4. 貼心建議與避坑指南
+            # 3. 判斷是否為【多選項內容】（例如 夜景 2 選 1）
+            if "【選項 A：" in desc_text and "【選項 B：" in desc_text:
+                intro_part = desc_text.split("【選項 A：")[0].strip()
+                if intro_part:
+                    st.markdown(f"ℹ️ **方案評估指引：**\n{intro_part}")
+                
+                rest_ab = desc_text.split("【選項 A：")[1]
+                part_a = rest_ab.split("【選項 B：")[0].strip()
+                part_b = rest_ab.split("【選項 B：")[1].strip()
+                
+                opt_col1, opt_col2 = st.columns(2)
+                with opt_col1:
+                    st.markdown(
+                        "<div style='background: rgba(14, 165, 233, 0.08); border: 1.5px solid rgba(14, 165, 233, 0.35); border-radius: 8px; padding: 12px; margin-bottom: 10px;'>"
+                        "<h4 style='color: #0284c7; margin: 0 0 6px 0;'>🌟 選項 A：2 元輪渡 ＋ 陸家嘴（最推薦）</h4>"
+                        "<span style='font-size: 12px; color: #0369a1;'>江風吹拂欣賞兩岸夜景，3 站地鐵極速接駁回龍陽路</span>"
+                        "</div>",
+                        unsafe_allow_html=True
+                    )
+                    lines_a = [l.strip() for l in part_a.split("\n") if l.strip() and not l.startswith("【選項")]
+                    for l in lines_a:
+                        st.markdown(l)
+                    
+                    # 選項 A 專屬導航（金陵東路渡口）
+                    a_lat, a_lon, a_name = 31.23412, 121.49221, "金陵東路渡口"
+                    a_app, a_gapp, a_web, a_gweb = build_nav_urls(a_name, a_lat, a_lon)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.link_button("🗺️ 高德：金陵東路渡口", a_app, use_container_width=True, help="手機喚起高德導航至金陵東路渡口")
+                    with c2:
+                        st.link_button("🌐 Google 地圖", a_gapp, use_container_width=True, help="Google 地圖查看金陵東路渡口")
+                    st.caption(f"備援連結：[高德網頁版]({a_web}) ｜ [Google 網頁版]({a_gweb})")
+                
+                with opt_col2:
+                    st.markdown(
+                        "<div style='background: rgba(168, 85, 247, 0.08); border: 1.5px solid rgba(168, 85, 247, 0.35); border-radius: 8px; padding: 12px; margin-bottom: 10px;'>"
+                        "<h4 style='color: #9333ea; margin: 0 0 6px 0;'>📸 選項 B：北外灘白玉蘭廣場（經典機位）</h4>"
+                        "<span style='font-size: 12px; color: #7e22ce;'>人民咖啡館免費高空全景，打卡北外灘巨蛋與明珠同框</span>"
+                        "</div>",
+                        unsafe_allow_html=True
+                    )
+                    lines_b = [l.strip() for l in part_b.split("\n") if l.strip()]
+                    for l in lines_b:
+                        st.markdown(l)
+                    
+                    # 選項 B 專屬導航（白玉蘭廣場）
+                    b_lat, b_lon, b_name = 31.24920, 121.49880, "白玉蘭廣場"
+                    b_app, b_gapp, b_web, b_gweb = build_nav_urls(b_name, b_lat, b_lon)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.link_button("🗺️ 高德：白玉蘭廣場", b_app, use_container_width=True, help="手機喚起高德導航至白玉蘭廣場")
+                    with c2:
+                        st.link_button("🌐 Google 地圖", b_gapp, use_container_width=True, help="Google 地圖查看白玉蘭廣場")
+                    st.caption(f"備援連結：[高德網頁版]({b_web}) ｜ [Google 網頁版]({b_gweb})")
+
+            # 4. 判斷是否為【交通雙選擇】（例如 選擇 1：地鐵16號線 vs 選擇 2：滴滴打車）
+            elif "• 選擇 1：" in desc_text and "• 選擇 2：" in desc_text:
+                intro_part = desc_text.split("• 選擇 1：")[0].strip()
+                if intro_part:
+                    st.markdown(f"ℹ️ **出行接駁決策：**\n{intro_part}")
+                
+                rest_s1 = desc_text.split("• 選擇 1：")[1]
+                part_s1 = rest_s1.split("• 選擇 2：")[0].strip()
+                part_s2 = rest_s1.split("• 選擇 2：")[1].strip()
+                
+                c_s1, c_s2 = st.columns(2)
+                with c_s1:
+                    st.markdown(
+                        "<div style='background: rgba(34, 197, 94, 0.08); border: 1.5px solid rgba(34, 197, 94, 0.35); border-radius: 8px; padding: 12px; margin-bottom: 10px;'>"
+                        "<h4 style='color: #16a34a; margin: 0 0 6px 0;'>🚇 選擇 1：地鐵 16 號線（省錢舒適首選）</h4>"
+                        "<span style='font-size: 12px; color: #15803d;'>起點站必有座，票價約 ¥8，末班車 22:30</span>"
+                        "</div>",
+                        unsafe_allow_html=True
+                    )
+                    for l in part_s1.split("\n"):
+                        if l.strip():
+                            st.markdown(l.strip())
+                with c_s2:
+                    st.markdown(
+                        "<div style='background: rgba(234, 88, 12, 0.08); border: 1.5px solid rgba(234, 88, 12, 0.35); border-radius: 8px; padding: 12px; margin-bottom: 10px;'>"
+                        "<h4 style='color: #c2410c; margin: 0 0 6px 0;'>🚕 選擇 2：直接叫滴滴打車（省時直達）</h4>"
+                        "<span style='font-size: 12px; color: #9a3412;'>浦東直接上高速避開市區塞車，約 45 分鐘直達</span>"
+                        "</div>",
+                        unsafe_allow_html=True
+                    )
+                    for l in part_s2.split("\n"):
+                        if l.strip():
+                            st.markdown(l.strip())
+                
+                # 目的地導航按鈕（臨港冰雪明城酒店）
+                dest_lat, dest_lon, dest_name = 30.91730, 121.90677, "臨港冰雪明城酒店"
+                amap_app_url, gmaps_app_url, amap_web_url, gmaps_web_url = build_nav_urls(dest_name, dest_lat, dest_lon)
+                nav_col1, nav_col2 = st.columns(2)
+                with nav_col1:
+                    st.link_button(f"🗺️ 開啟高德導航至：{dest_name}", amap_app_url, use_container_width=True)
+                with nav_col2:
+                    st.link_button(f"🌐 Google 地圖查看：{dest_name}", gmaps_app_url, use_container_width=True)
+                st.caption(f"📱 支援手機 App 原生直連 ｜ 若未安裝 App 可點此開啟 [高德網頁版]({amap_web_url}) 或 [Google 網頁版]({gmaps_web_url})")
+
+            # 5. 一般行程結構化條列
+            else:
+                st.markdown("**📋 操作細節與重要步驟：**")
+                desc_lines = [line.strip() for line in desc_text.split("\n") if line.strip()]
+                for line in desc_lines:
+                    if line.startswith("• ✈️") or line.startswith("• 🚇") or line.startswith("• 🎒") or line.startswith("• 🚶") or line.startswith("⏰") or line.startswith("🍱"):
+                        st.markdown(f"**{line}**")
+                    else:
+                        st.markdown(line)
+                
+                # 單一景點導航按鈕
+                lat, lon, spot_name = get_navigation_info(node['title'], node['desc'] or "")
+                amap_app_url, gmaps_app_url, amap_web_url, gmaps_web_url = build_nav_urls(spot_name, lat, lon)
+                
+                nav_col1, nav_col2 = st.columns(2)
+                with nav_col1:
+                    st.link_button("🗺️ 開啟高德導航", amap_app_url, use_container_width=True, help=f"手機點擊直接喚起高德地圖 App 導航至：{spot_name}")
+                with nav_col2:
+                    st.link_button("🌐 Google 地圖", gmaps_app_url, use_container_width=True, help=f"手機點擊直接喚起 Google 地圖 App 查看：{spot_name}")
+                st.caption(f"📱 導航目標：**{spot_name}** ｜ 備援連結：[高德網頁版]({amap_web_url}) ｜ [Google 網頁版]({gmaps_web_url})")
+
+            # 6. 貼心建議與避坑指南
             if node['tip']:
                 tip_clean = node['tip'].lstrip("💡").strip()
                 st.markdown(
-                    f"<div style='background: rgba(245, 158, 11, 0.10); border-left: 4px solid #f59e0b; padding: 9px 14px; border-radius: 6px; margin: 10px 0 14px 0;'>"
+                    f"<div style='background: rgba(245, 158, 11, 0.10); border-left: 4px solid #f59e0b; padding: 10px 14px; border-radius: 6px; margin: 12px 0 6px 0;'>"
                     f"<strong style='color: #d97706;'>💡 貼心提醒＆避坑注意：</strong>"
                     f"<span>{tip_clean}</span></div>",
                     unsafe_allow_html=True
                 )
-
-            # 5. 手機原生 App 導航按鈕 (URI Scheme 專屬協定與備援)
-            lat, lon, spot_name = get_navigation_info(node['title'], node['desc'] or "")
-            encoded_name = urllib.parse.quote(spot_name)
-            
-            # 手機專用協定 (URI Scheme)
-            amap_app_url = f"amapuri://route/plan/?dlat={lat}&dlon={lon}&dname={encoded_name}&dev=0&t=0"
-            gmaps_app_url = f"comgooglemaps://?q={lat},{lon}&zoom=15"
-            
-            # 網頁版備援連結
-            amap_web_url = f"https://uri.amap.com/marker?position={lon},{lat}&name={encoded_name}"
-            gmaps_web_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            
-            nav_col1, nav_col2 = st.columns(2)
-            with nav_col1:
-                st.link_button("🗺️ 開啟高德導航", amap_app_url, use_container_width=True, help=f"手機點擊直接喚起高德地圖 App 導航至：{spot_name}")
-            with nav_col2:
-                st.link_button("🌐 Google 地圖", gmaps_app_url, use_container_width=True, help=f"手機點擊直接喚起 Google 地圖 App 查看：{spot_name}")
-            
-            st.caption(f"📱 支援手機 App 原生直連 ｜ 若未安裝 App 可點此開啟 [高德網頁版]({amap_web_url}) 或 [Google 網頁版]({gmaps_web_url})")
 
     with st.expander(f"➕ 為 Day {day_select} 新增行程節點"):
         with st.form(f"add_node_form_{day_select}", clear_on_submit=True):
