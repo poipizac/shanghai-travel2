@@ -345,8 +345,8 @@ with st.sidebar.expander("➕ 新增成員帳本"):
             uname_clean = new_uname.strip()
             if not uname_clean:
                 st.sidebar.error("請輸入成員名稱！")
-            elif uname_clean in user_rows:
-                st.sidebar.warning(f"成員【{uname_clean}】已存在！")
+            elif uname_clean in user_rows and not copy_template:
+                st.sidebar.warning(f"成員【{uname_clean}】已存在！若需重新匯入範本消費明細，請勾選「複製現有成員的消費明細作為初始範本」。")
             else:
                 # 確保在寫入預算與複製消費紀錄前，資料表結構已完全建立
                 init_db()
@@ -361,6 +361,10 @@ with st.sidebar.expander("➕ 新增成員帳本"):
                     
                     copied_count = 0
                     if copy_template and copy_source:
+                        # 若該成員已存在，先清理該成員既有明細以實現完整覆蓋/同步
+                        if uname_clean in user_rows:
+                            c.execute("DELETE FROM expenses WHERE user_name = ?", (uname_clean,))
+                        
                         c.execute("""
                             INSERT INTO expenses (day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, user_name)
                             SELECT day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, ?
@@ -369,7 +373,7 @@ with st.sidebar.expander("➕ 新增成員帳本"):
                         """, (uname_clean, copy_source))
                         copied_count = c.rowcount
                         
-                        # 在同一連線交易中讀取來源預算並寫入新成員預算，杜絕多連線鎖庫
+                        # 在同一連線交易中讀取來源預算並寫入目標成員預算，杜絕多連線鎖庫
                         c.execute("SELECT value FROM settings WHERE key = ?", (f"total_budget_{copy_source}",))
                         src_row = c.fetchone()
                         if not src_row:
@@ -383,9 +387,11 @@ with st.sidebar.expander("➕ 新增成員帳本"):
                 finally:
                     db.close()
                 
-                # 自動切換到新成員帳本，並即時觸發重新整理
+                # 自動切換到目標成員帳本，並即時觸發重新整理
                 st.session_state["active_user"] = uname_clean
-                if copied_count > 0:
+                if uname_clean in user_rows:
+                    st.sidebar.success(f"已成功為現有成員【{uname_clean}】重新同步【{copy_source}】的 {copied_count} 筆消費明細與預算！")
+                elif copied_count > 0:
                     st.sidebar.success(f"已成功新增【{uname_clean}】並複製【{copy_source}】的 {copied_count} 筆消費明細！")
                 else:
                     st.sidebar.success(f"已成功新增空白帳本【{uname_clean}】！")
