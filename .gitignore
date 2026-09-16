@@ -1,0 +1,18 @@
+# Python 虛擬環境與快取
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 穿透工具執行檔與大型二進位檔 (避免上傳至 GitHub 卡死)
+*.exe
+*.lnk
+
+# 開發設定與暫存檔
+.vscode/
+.idea/
+.DS_Store
+
+# 注意：保留 travel.db 以利 Streamlit Cloud 預置行程與資料庫結構
+!travel.db
