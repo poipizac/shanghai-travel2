@@ -33,7 +33,17 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
     
-    # 使用者名單表 (個人帳本切換隔離)
+    # 0. 系統設定表 (最優先建立，確保所有成員與全域設定表必定存在)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    """)
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('total_budget', '20100')")
+    conn.commit()
+
+    # 1. 使用者名單表 (個人帳本切換隔離)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         name TEXT PRIMARY KEY,
@@ -203,6 +213,7 @@ def init_db():
 def get_setting(key, default=""):
     conn = get_db()
     c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     c.execute("SELECT value FROM settings WHERE key = ?", (key,))
     row = c.fetchone()
     conn.close()
@@ -211,6 +222,7 @@ def get_setting(key, default=""):
 def set_setting(key, value):
     conn = get_db()
     c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
     conn.close()
@@ -279,26 +291,38 @@ with st.sidebar.expander("➕ 新增成員帳本"):
             elif uname_clean in user_rows:
                 st.sidebar.warning(f"成員【{uname_clean}】已存在！")
             else:
+                # 確保在寫入預算與複製消費紀錄前，資料表結構已完全建立
+                init_db()
+                
                 db = get_db()
                 c = db.cursor()
-                c.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (uname_clean,))
-                
-                copied_count = 0
-                if copy_template and copy_source:
-                    c.execute("""
-                        INSERT INTO expenses (day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, user_name)
-                        SELECT day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, ?
-                        FROM expenses
-                        WHERE user_name = ?
-                    """, (uname_clean, copy_source))
-                    copied_count = c.rowcount
+                try:
+                    c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+                    c.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (uname_clean,))
                     
-                    # 同步複製預算設定
-                    src_budget = get_setting(f"total_budget_{copy_source}", get_setting("total_budget", "20100"))
-                    set_setting(f"total_budget_{uname_clean}", src_budget)
-                
-                db.commit()
-                db.close()
+                    copied_count = 0
+                    if copy_template and copy_source:
+                        c.execute("""
+                            INSERT INTO expenses (day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, user_name)
+                            SELECT day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, ?
+                            FROM expenses
+                            WHERE user_name = ?
+                        """, (uname_clean, copy_source))
+                        copied_count = c.rowcount
+                        
+                        # 在同一連線交易中讀取來源預算並寫入新成員預算，杜絕多連線鎖庫
+                        c.execute("SELECT value FROM settings WHERE key = ?", (f"total_budget_{copy_source}",))
+                        src_row = c.fetchone()
+                        if not src_row:
+                            c.execute("SELECT value FROM settings WHERE key = 'total_budget'")
+                            src_row = c.fetchone()
+                        src_budget_val = src_row[0] if src_row else "20100"
+                        
+                        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (f"total_budget_{uname_clean}", str(src_budget_val)))
+                    
+                    db.commit()
+                finally:
+                    db.close()
                 
                 # 自動切換到新成員帳本，並即時觸發重新整理
                 st.session_state["active_user"] = uname_clean
