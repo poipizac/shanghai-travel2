@@ -27,15 +27,15 @@ DB_FILE = os.path.join(BASE_DIR, "travel.db")
 
 def get_navigation_info(title: str, desc: str = "") -> tuple[float, float, str]:
     """根據行程標題與內文自動匹配最精準之經緯度座標與目標地標名稱"""
-    combined = f"{title} {desc}"
     spot_rules = [
         ("迪士尼", 31.14151, 121.65796, "上海迪士尼度假區"),
         ("動物城", 31.14151, 121.65796, "上海迪士尼度假區"),
         ("加勒比海盜", 31.14151, 121.65796, "上海迪士尼度假區"),
         ("幻影秀", 31.14151, 121.65796, "上海迪士尼度假區"),
+        ("臨港冰雪明城", 30.91730, 121.90677, "臨港冰雪明城酒店"),
+        ("臨港", 30.91730, 121.90677, "臨港冰雪明城酒店"),
         ("耀雪", 30.89850, 121.92110, "耀雪冰雪世界"),
         ("滑雪", 30.89850, 121.92110, "耀雪冰雪世界"),
-        ("臨港", 30.91730, 121.90677, "臨港冰雪明城酒店"),
         ("宮宴", 31.22693, 121.44772, "上海宮宴"),
         ("漢服", 31.22693, 121.44772, "上海宮宴"),
         ("武康", 31.20443, 121.43828, "武康大樓"),
@@ -53,8 +53,14 @@ def get_navigation_info(title: str, desc: str = "") -> tuple[float, float, str]:
         ("機場", 31.14488, 121.81055, "浦東國際機場T2"),
         ("龍陽路", 31.20371, 121.55776, "龍陽路地鐵站"),
     ]
+    # 優先從標題精確匹配
     for kw, lat, lon, name in spot_rules:
-        if kw in combined:
+        if kw in title:
+            return lat, lon, name
+            
+    # 其次從說明文字匹配
+    for kw, lat, lon, name in spot_rules:
+        if kw in desc:
             return lat, lon, name
             
     fallback_name = title.split("】")[-1].split("➔")[0].strip() or "上海市"
@@ -563,17 +569,25 @@ with tabs[0]:
             if node['tip']:
                 st.warning(f"{node['tip']}")
 
-            # 導航按鈕 (高德導航與 Google 地圖)
+            # 手機原生 App 導航按鈕 (URI Scheme 專屬協定與備援)
             lat, lon, spot_name = get_navigation_info(node['title'], node['desc'] or "")
             encoded_name = urllib.parse.quote(spot_name)
-            amap_url = f"https://uri.amap.com/marker?position={lon},{lat}&name={encoded_name}"
-            gmaps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            
+            # 1. 手機專用協定 (URI Scheme：手機點擊直接嘗試喚起對應的原生導航 App)
+            amap_app_url = f"amapuri://route/plan/?dlat={lat}&dlon={lon}&dname={encoded_name}&dev=0&t=0"
+            gmaps_app_url = f"comgooglemaps://?q={lat},{lon}&zoom=15"
+            
+            # 2. 網頁版備援連結 (若未安裝原生 App 或電腦端瀏覽時自動備援)
+            amap_web_url = f"https://uri.amap.com/marker?position={lon},{lat}&name={encoded_name}"
+            gmaps_web_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
             
             nav_col1, nav_col2 = st.columns(2)
             with nav_col1:
-                st.link_button("🗺️ 開啟高德導航", amap_url, use_container_width=True, help=f"前往高德地圖導航至：{spot_name}")
+                st.link_button("🗺️ 開啟高德導航", amap_app_url, use_container_width=True, help=f"手機點擊直接喚起高德地圖 App 導航至：{spot_name}")
             with nav_col2:
-                st.link_button("🌐 Google 地圖", gmaps_url, use_container_width=True, help=f"在 Google 地圖查看：{spot_name}")
+                st.link_button("🌐 Google 地圖", gmaps_app_url, use_container_width=True, help=f"手機點擊直接喚起 Google 地圖 App 查看：{spot_name}")
+            
+            st.caption(f"📱 支援手機 App 原生直連 ｜ 若未安裝 App 可點此開啟 [高德網頁版]({amap_web_url}) 或 [Google 網頁版]({gmaps_web_url})")
 
     with st.expander(f"➕ 為 Day {day_select} 新增行程節點"):
         with st.form(f"add_node_form_{day_select}", clear_on_submit=True):
