@@ -476,15 +476,42 @@ with st.container(border=True):
             base_sum = budgets_df['budget_twd'].sum() or 20100.0
             scale_ratio = total_budget_twd / base_sum
             actual_map = expenses_df.groupby("category")["amount_twd"].sum().to_dict() if not expenses_df.empty else {}
-            chart_data = []
+            records = []
             for _, row in budgets_df.iterrows():
                 cat = row['category']
                 b_val = round(row['budget_twd'] * scale_ratio, 0)
                 a_val = actual_map.get(cat, 0.0)
-                chart_data.append({"類別": cat, "預算目標": b_val, "實際支出": a_val})
+                records.append({"類別": cat, "類型": "預算目標", "金額 (TWD)": b_val})
+                records.append({"類別": cat, "類型": "實際支出", "金額 (TWD)": a_val})
             
-            plot_df = pd.DataFrame(chart_data).set_index("類別")
-            st.bar_chart(plot_df, height=230)
+            bar_df = pd.DataFrame(records)
+            bar_chart = alt.Chart(bar_df).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+                x=alt.X(
+                    "類別:N",
+                    title=None,
+                    axis=alt.Axis(
+                        labelAngle=0,
+                        labelFontSize=11,
+                        labelFontWeight="bold"
+                    )
+                ),
+                y=alt.Y("金額 (TWD):Q", title="金額 (NT$)"),
+                xOffset=alt.XOffset("類型:N", title="項目"),
+                color=alt.Color(
+                    "類型:N",
+                    scale=alt.Scale(
+                        domain=["預算目標", "實際支出"],
+                        range=["#94a3b8", "#f43f5e"]
+                    ),
+                    legend=alt.Legend(title=None, orient="top", direction="horizontal")
+                ),
+                tooltip=[
+                    alt.Tooltip("類別:N", title="類別"),
+                    alt.Tooltip("類型:N", title="項目"),
+                    alt.Tooltip("金額 (TWD):Q", title="金額 (NT$)", format=",.0f")
+                ]
+            ).properties(height=230)
+            st.altair_chart(bar_chart, use_container_width=True)
 
     # 隨手記帳面板 (自動標記當前成員)
     with st.expander(f"⚡ 為【{current_user}】動態新增消費記錄 (自動更新上方看板)", expanded=False):
