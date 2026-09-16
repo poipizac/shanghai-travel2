@@ -100,16 +100,14 @@ def init_db():
     )
     """)
     
-    # 檢查現有 users 資料，自動遷移對齊進 members 表
-    cursor.execute("SELECT name FROM users")
-    for u in cursor.fetchall():
-        cursor.execute("INSERT OR IGNORE INTO members (name) VALUES (?)", (u[0],))
-        
-    cursor.execute("INSERT OR IGNORE INTO members (name) VALUES ('本人')")
-    cursor.execute("INSERT OR IGNORE INTO members (name) VALUES ('同行好友')")
-    cursor.execute("INSERT OR IGNORE INTO users (name) VALUES ('本人')")
-    cursor.execute("INSERT OR IGNORE INTO users (name) VALUES ('同行好友')")
-    conn.commit()
+    # 嚴格資料防護機制：只有當 members 表完全沒有任何資料時，才寫入預設成員（本人、Chris）
+    cursor.execute("SELECT COUNT(*) FROM members")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT OR IGNORE INTO members (name) VALUES ('本人')")
+        cursor.execute("INSERT OR IGNORE INTO members (name) VALUES ('Chris')")
+        cursor.execute("INSERT OR IGNORE INTO users (name) VALUES ('本人')")
+        cursor.execute("INSERT OR IGNORE INTO users (name) VALUES ('Chris')")
+        conn.commit()
     
     # 行程表
     cursor.execute("""
