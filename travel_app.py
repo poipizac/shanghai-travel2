@@ -247,20 +247,65 @@ conn.close()
 if not user_rows:
     user_rows = ["本人"]
 
+# 維護當前選中成員狀態
+if "active_user" not in st.session_state or st.session_state["active_user"] not in user_rows:
+    st.session_state["active_user"] = user_rows[0]
+
 st.sidebar.markdown("### 👤 個人帳本管理")
-current_user = st.sidebar.selectbox("切換當前帳本：", user_rows, index=0)
+current_user = st.sidebar.selectbox(
+    "切換當前帳本：",
+    user_rows,
+    index=user_rows.index(st.session_state["active_user"]),
+    key="user_select_box"
+)
+st.session_state["active_user"] = current_user
 
 with st.sidebar.expander("➕ 新增成員帳本"):
     with st.form("add_user_form", clear_on_submit=True):
         new_uname = st.text_input("成員名稱", placeholder="例如：伴侶 / 媽媽 / 小明")
-        if st.form_submit_button("新增帳本", type="secondary"):
-            if new_uname.strip():
+        copy_template = st.checkbox("複製現有成員的消費明細作為初始範本", value=True)
+        default_copy_src = "本人" if "本人" in user_rows else user_rows[0]
+        copy_source = st.selectbox(
+            "選擇複製來源成員：",
+            user_rows,
+            index=user_rows.index(default_copy_src) if default_copy_src in user_rows else 0,
+            help="選擇要作為範本的成員，系統會將該成員的所有消費明細複製一份至新成員帳本"
+        )
+        submit_new_user = st.form_submit_button("新增帳本", type="secondary")
+        if submit_new_user:
+            uname_clean = new_uname.strip()
+            if not uname_clean:
+                st.sidebar.error("請輸入成員名稱！")
+            elif uname_clean in user_rows:
+                st.sidebar.warning(f"成員【{uname_clean}】已存在！")
+            else:
                 db = get_db()
                 c = db.cursor()
-                c.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (new_uname.strip(),))
+                c.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (uname_clean,))
+                
+                copied_count = 0
+                if copy_template and copy_source:
+                    c.execute("""
+                        INSERT INTO expenses (day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, user_name)
+                        SELECT day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, ?
+                        FROM expenses
+                        WHERE user_name = ?
+                    """, (uname_clean, copy_source))
+                    copied_count = c.rowcount
+                    
+                    # 同步複製預算設定
+                    src_budget = get_setting(f"total_budget_{copy_source}", get_setting("total_budget", "20100"))
+                    set_setting(f"total_budget_{uname_clean}", src_budget)
+                
                 db.commit()
                 db.close()
-                st.sidebar.success(f"已成功新增帳本【{new_uname.strip()}】！")
+                
+                # 自動切換到新成員帳本，並即時觸發重新整理
+                st.session_state["active_user"] = uname_clean
+                if copied_count > 0:
+                    st.sidebar.success(f"已成功新增【{uname_clean}】並複製【{copy_source}】的 {copied_count} 筆消費明細！")
+                else:
+                    st.sidebar.success(f"已成功新增空白帳本【{uname_clean}】！")
                 st.rerun()
 
 st.sidebar.divider()
