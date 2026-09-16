@@ -43,15 +43,31 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('total_budget', '20100')")
     conn.commit()
 
-    # 1. 使用者名單表 (個人帳本切換隔離)
+    # 1. 成員名單表 members 與相容表 users (個人帳本切換隔離，保證重啟時完整保留歷史資料)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS members (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         name TEXT PRIMARY KEY,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    
+    # 檢查現有 users 資料，自動遷移對齊進 members 表
+    cursor.execute("SELECT name FROM users")
+    for u in cursor.fetchall():
+        cursor.execute("INSERT OR IGNORE INTO members (name) VALUES (?)", (u[0],))
+        
+    cursor.execute("INSERT OR IGNORE INTO members (name) VALUES ('本人')")
+    cursor.execute("INSERT OR IGNORE INTO members (name) VALUES ('同行好友')")
     cursor.execute("INSERT OR IGNORE INTO users (name) VALUES ('本人')")
     cursor.execute("INSERT OR IGNORE INTO users (name) VALUES ('同行好友')")
+    conn.commit()
     
     # 行程表
     cursor.execute("""
@@ -254,7 +270,8 @@ with st.expander("🛫 去程與回程航班詳細資訊 (點擊展開)", expand
 # ==========================================
 conn = get_db()
 cur = conn.cursor()
-user_rows = [r[0] for r in cur.execute("SELECT name FROM users ORDER BY rowid ASC").fetchall()]
+cur.execute("CREATE TABLE IF NOT EXISTS members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+user_rows = [r[0] for r in cur.execute("SELECT name FROM members ORDER BY id ASC").fetchall()]
 conn.close()
 if not user_rows:
     user_rows = ["本人"]
@@ -298,6 +315,8 @@ with st.sidebar.expander("➕ 新增成員帳本"):
                 c = db.cursor()
                 try:
                     c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+                    c.execute("CREATE TABLE IF NOT EXISTS members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+                    c.execute("INSERT OR IGNORE INTO members (name) VALUES (?)", (uname_clean,))
                     c.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (uname_clean,))
                     
                     copied_count = 0
