@@ -26,7 +26,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "travel.db")
 
 from itinerary_data import DEFAULT_ITINERARY, get_navigation_info, build_nav_urls
-from db_cloud import is_cloud_mode, get_compatible_db
+from db_cloud import is_cloud_mode, get_compatible_db, cloud_safe_read_sql
 
 def get_db():
     return get_compatible_db()
@@ -36,9 +36,61 @@ def init_db():
         conn = get_db()
         cursor = conn.cursor()
         try:
+            # 核心表：settings, members, users
             cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
             cursor.execute("CREATE TABLE IF NOT EXISTS members (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)")
             cursor.execute("CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)")
+            
+            # 消費明細表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS expenses (
+                    id SERIAL PRIMARY KEY,
+                    day INTEGER DEFAULT 0,
+                    category TEXT NOT NULL,
+                    item_name TEXT NOT NULL,
+                    amount_twd NUMERIC NOT NULL,
+                    amount_rmb NUMERIC NOT NULL,
+                    payment_method TEXT DEFAULT '微信支付',
+                    expense_date TEXT,
+                    notes TEXT,
+                    user_name TEXT DEFAULT '本人',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 行程表 (使用 desc_text 避開 PostgreSQL 保留字 desc)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS itinerary (
+                    id SERIAL PRIMARY KEY,
+                    day INTEGER NOT NULL,
+                    time_slot TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    tag TEXT,
+                    desc_text TEXT,
+                    transit TEXT,
+                    tip TEXT,
+                    sort_order INTEGER DEFAULT 0
+                )
+            """)
+            
+            # 行前清單表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS checklist (
+                    id SERIAL PRIMARY KEY,
+                    item_name TEXT NOT NULL,
+                    is_checked INTEGER DEFAULT 0,
+                    category TEXT DEFAULT '重要證件與App'
+                )
+            """)
+            
+            # 預算上限表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS budget_limits (
+                    category TEXT PRIMARY KEY,
+                    budget_twd NUMERIC NOT NULL,
+                    budget_rmb NUMERIC NOT NULL
+                )
+            """)
             
             for def_user in ["本人", "Chris", "Angus"]:
                 cursor.execute("INSERT INTO members (name) VALUES (%s) ON CONFLICT (name) DO NOTHING", (def_user,))
@@ -49,8 +101,12 @@ def init_db():
             cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", ('budget_Chris', '25000'))
             cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", ('budget_Angus', '20100'))
             conn.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            st.error(f"⚠️ 雲端資料庫初始化錯誤: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         finally:
             conn.close()
         return
@@ -250,8 +306,11 @@ with st.expander("🛫 去程與回程航班詳細資訊 (點擊展開)", expand
 # ==========================================
 conn = get_db()
 cur = conn.cursor()
-cur.execute("CREATE TABLE IF NOT EXISTS members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-user_rows = [r[0] for r in cur.execute("SELECT name FROM members ORDER BY id ASC").fetchall()]
+try:
+    cur.execute("SELECT name FROM members ORDER BY id ASC")
+    user_rows = [r[0] for r in cur.fetchall()]
+except Exception:
+    user_rows = []
 conn.close()
 if not user_rows:
     user_rows = ["本人", "Chris", "Angus"]
@@ -310,8 +369,6 @@ with st.sidebar.expander("➕ 新增成員帳本"):
                 db = get_db()
                 c = db.cursor()
                 try:
-                    c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-                    c.execute("CREATE TABLE IF NOT EXISTS members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
                     c.execute("INSERT OR IGNORE INTO members (name) VALUES (?)", (uname_clean,))
                     c.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (uname_clean,))
                     
@@ -382,12 +439,12 @@ st.sidebar.caption("💡 每個成員的消費與預算上限完全隔離儲存�
 # ==========================================
 conn = get_db()
 # 依當前使用者隔離載入消費記錄
-expenses_df = pd.read_sql_query(
+expenses_df = cloud_safe_read_sql(
     "SELECT * FROM expenses WHERE user_name = ? ORDER BY id DESC", 
     conn, 
     params=(current_user,)
 )
-budgets_df = pd.read_sql_query("SELECT * FROM budget_limits", conn)
+budgets_df = cloud_safe_read_sql("SELECT * FROM budget_limits", conn)
 conn.close()
 
 # 總預算連動該成員側邊欄動態持久化數值

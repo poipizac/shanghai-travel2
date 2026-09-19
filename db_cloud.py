@@ -73,8 +73,16 @@ def adapt_sql_for_pg(sql: str) -> str:
     # AUTOINCREMENT 轉換為 SERIAL PRIMARY KEY
     s = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'SERIAL PRIMARY KEY', s, flags=re.IGNORECASE)
 
-    # 欄位 desc TEXT 轉譯為 "desc" TEXT 避免保留關鍵字衝突
+    # 欄位 desc TEXT 轉譯為 "desc" TEXT 避免保留關鍵字衝突 (DDL)
     s = re.sub(r'\bdesc\s+TEXT\b', '"desc" TEXT', s, flags=re.IGNORECASE)
+    
+    # 將 itinerary 表中的 desc 欄位名稱轉譯為 desc_text（與 Supabase 架構對齊）
+    # 處理 INSERT 語句中的 desc 欄位列表 (e.g., "..., desc, transit, ...")
+    if 'itinerary' in s.lower():
+        # INSERT 語句中的欄位列表
+        s = re.sub(r'\bdesc\b(?=\s*,\s*transit)', 'desc_text', s)
+        # VALUES 後面的 SELECT 語句
+        s = re.sub(r',\s*desc\s*,\s*transit', ', desc_text, transit', s)
 
     # 參數問號 ? 轉譯為 %s
     s = s.replace("?", "%s")
@@ -124,7 +132,12 @@ class CloudCursorWrapper:
             # 忽視建立表時的已存在或重複錯誤
             err_msg = str(e).lower()
             if "already exists" in err_msg or "duplicate key" in err_msg:
-                pass
+                # psycopg2 在 autocommit=False 模式下，錯誤後交易進入 aborted 狀態
+                # 必須 rollback 才能繼續執行後續查詢
+                try:
+                    self._cur.connection.rollback()
+                except Exception:
+                    pass
             else:
                 raise e
         return self
@@ -145,6 +158,10 @@ class CloudCursorWrapper:
     def fetchmany(self, size=None):
         rows = self._cur.fetchmany(size) if size else self._cur.fetchmany()
         return [RowAdapter(r) for r in rows] if rows else []
+
+    @property
+    def description(self):
+        return self._cur.description
 
     @property
     def rowcount(self):
@@ -216,3 +233,13 @@ def get_compatible_db():
         conn = sqlite3.connect(SQLITE_DB_PATH, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
+
+def cloud_safe_read_sql(sql: str, conn, params=None):
+    """pandas read_sql_query 的雲端安全包裝：自動轉譯 SQL 語法與參數格式"""
+    import pandas as pd
+    if isinstance(conn, CloudConnectionWrapper):
+        adapted_sql = adapt_sql_for_pg(sql)
+        # 使用內部 psycopg2 連線讓 pandas 直接讀取
+        return pd.read_sql_query(adapted_sql, conn._conn, params=params)
+    else:
+        return pd.read_sql_query(sql, conn, params=params)
