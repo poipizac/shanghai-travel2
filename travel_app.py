@@ -26,12 +26,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "travel.db")
 
 from itinerary_data import DEFAULT_ITINERARY, get_navigation_info, build_nav_urls
-from db_cloud import is_cloud_mode
+from db_cloud import is_cloud_mode, get_compatible_db
 
 def get_db():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return get_compatible_db()
 
 def init_db():
     conn = get_db()

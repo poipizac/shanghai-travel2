@@ -7,10 +7,10 @@
 """
 
 import os
+import re
 import sqlite3
-from typing import List, Dict, Any, Optional
+from typing import Optional, Any
 import streamlit as st
-from itinerary_data import DEFAULT_ITINERARY
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SQLITE_DB_PATH = os.path.join(BASE_DIR, "travel.db")
@@ -39,286 +39,128 @@ def is_cloud_mode() -> bool:
     """是否處於雲端資料庫模式"""
     return bool(get_cloud_db_url())
 
-_engine = None
-
-def get_engine():
-    """獲取 SQLAlchemy Engine (僅在雲端模式下)"""
-    global _engine
-    if not is_cloud_mode():
-        return None
-    if _engine is None:
-        from sqlalchemy import create_engine
-        url = get_cloud_db_url()
-        # SQLAlchemy 需將 postgres:// 轉換為 postgresql://
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql://", 1)
-        _engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10)
-    return _engine
-
-class DBConnectionWrapper:
-    """輕量統一的資料庫查詢與事務封裝器"""
+def adapt_sql_for_pg(sql: str) -> str:
+    """將 SQLite 語法轉譯為 PostgreSQL 語法"""
+    s = sql.strip()
     
-    @staticmethod
-    def execute_query(sql_sqlite: str, sql_pg: Optional[str] = None, params: tuple = ()) -> List[Dict[str, Any]]:
-        """執行查詢並回傳字典列表"""
-        if is_cloud_mode():
-            from sqlalchemy import text
-            engine = get_engine()
-            query_sql = sql_pg or sql_sqlite.replace("?", ":param")
-            # 轉換參數格式
-            with engine.connect() as conn:
-                if isinstance(params, (list, tuple)) and len(params) > 0:
-                    # 將 ? 依序替換為 :p0, :p1, ...
-                    named_sql = sql_pg if sql_pg else sql_sqlite
-                    param_dict = {}
-                    parts = named_sql.split("?")
-                    if len(parts) - 1 == len(params):
-                        rebuilt = []
-                        for i, part in enumerate(parts[:-1]):
-                            pname = f"p{i}"
-                            rebuilt.append(part + f":{pname}")
-                            param_dict[pname] = params[i]
-                        rebuilt.append(parts[-1])
-                        named_sql = "".join(rebuilt)
-                    result = conn.execute(text(named_sql), param_dict)
-                else:
-                    result = conn.execute(text(query_sql))
-                return [dict(row._mapping) for row in result]
-        else:
+    # 忽略 SQLite PRAGMA 指令
+    if s.upper().startswith("PRAGMA"):
+        return "SELECT 1"
+        
+    # 轉譯 INSERT OR IGNORE INTO
+    if "INSERT OR IGNORE INTO" in s:
+        s = s.replace("INSERT OR IGNORE INTO", "INSERT INTO")
+        if "ON CONFLICT" not in s.upper():
+            s = s.rstrip("; ") + " ON CONFLICT DO NOTHING"
+            
+    # 轉譯 INSERT OR REPLACE INTO settings
+    elif "INSERT OR REPLACE INTO settings" in s:
+        s = s.replace("INSERT OR REPLACE INTO settings", "INSERT INTO settings")
+        if "ON CONFLICT" not in s.upper():
+            s = s.rstrip("; ") + " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+            
+    # 轉譯一般 INSERT OR REPLACE INTO
+    elif "INSERT OR REPLACE INTO" in s:
+        s = s.replace("INSERT OR REPLACE INTO", "INSERT INTO")
+
+    # AUTOINCREMENT 轉換
+    s = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'SERIAL PRIMARY KEY', s, flags=re.IGNORECASE)
+
+    # 參數問號 ? 轉譯為 %s
+    s = s.replace("?", "%s")
+    return s
+
+class CloudCursorWrapper:
+    """包裝 psycopg2 cursor 使其介面與行為 100% 相容於 sqlite3 cursor"""
+    def __init__(self, pg_cursor):
+        self._cur = pg_cursor
+
+    def execute(self, sql: str, params: tuple = ()):
+        adapted_sql = adapt_sql_for_pg(sql)
+        if adapted_sql == "SELECT 1":
+            return self
+        try:
+            self._cur.execute(adapted_sql, params)
+        except Exception as e:
+            # 忽視建立表時的已存在錯誤
+            if "already exists" in str(e):
+                pass
+            else:
+                raise e
+        return self
+
+    def executemany(self, sql: str, seq_of_params):
+        adapted_sql = adapt_sql_for_pg(sql)
+        self._cur.executemany(adapted_sql, seq_of_params)
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def fetchmany(self, size=None):
+        return self._cur.fetchmany(size) if size else self._cur.fetchmany()
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    @property
+    def lastrowid(self):
+        return None
+
+    def close(self):
+        self._cur.close()
+
+class CloudConnectionWrapper:
+    """包裝 psycopg2 connection 使其與 sqlite3 connection 介面完全相容"""
+    def __init__(self, db_url: str):
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        # 轉換 postgresql:// 格式
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        self._conn = psycopg2.connect(db_url, cursor_factory=DictCursor)
+        self._conn.autocommit = False
+
+    def cursor(self):
+        return CloudCursorWrapper(self._conn.cursor())
+
+    def execute(self, sql: str, params: tuple = ()):
+        cur = self.cursor()
+        return cur.execute(sql, params)
+
+    def executemany(self, sql: str, seq_of_params):
+        cur = self.cursor()
+        return cur.executemany(sql, seq_of_params)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+def get_compatible_db():
+    """統一獲取資料庫連線（雲端連線優先，本地 SQLite 回退）"""
+    cloud_url = get_cloud_db_url()
+    if cloud_url:
+        try:
+            return CloudConnectionWrapper(cloud_url)
+        except Exception as e:
+            # 若雲端連線失敗，優雅回退到本地 SQLite 並提示
+            st.error(f"⚠️ 雲端資料庫連線失敗，自動回退至本地 SQLite 模式。錯誤原因: {e}")
             conn = sqlite3.connect(SQLITE_DB_PATH, check_same_thread=False)
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(sql_sqlite, params)
-            rows = [dict(row) for row in cur.fetchall()]
-            conn.close()
-            return rows
-
-    @staticmethod
-    def execute_commit(sql_sqlite: str, sql_pg: Optional[str] = None, params: tuple = ()):
-        """執行寫入/修改/刪除並提交"""
-        if is_cloud_mode():
-            from sqlalchemy import text
-            engine = get_engine()
-            with engine.begin() as conn:
-                named_sql = sql_pg if sql_pg else sql_sqlite
-                param_dict = {}
-                parts = named_sql.split("?")
-                if len(parts) - 1 == len(params):
-                    rebuilt = []
-                    for i, part in enumerate(parts[:-1]):
-                        pname = f"p{i}"
-                        rebuilt.append(part + f":{pname}")
-                        param_dict[pname] = params[i]
-                    rebuilt.append(parts[-1])
-                    named_sql = "".join(rebuilt)
-                conn.execute(text(named_sql), param_dict if param_dict else params)
-        else:
-            conn = sqlite3.connect(SQLITE_DB_PATH, check_same_thread=False)
-            cur = conn.cursor()
-            cur.execute(sql_sqlite, params)
-            conn.commit()
-            conn.close()
-
-# -------------------------------------------------------------
-# 核心業務資料庫操作介面
-# -------------------------------------------------------------
-
-def init_all_tables():
-    """初始化所有資料表與預設三人組名單（本人、Chris、Angus）"""
-    if is_cloud_mode():
-        # 雲端模式下透過 SQLAlchemy 檢查與確保基礎設定
-        try:
-            for member in DEFAULT_MEMBERS:
-                DBConnectionWrapper.execute_commit(
-                    "INSERT OR IGNORE INTO members (name) VALUES (?)",
-                    "INSERT INTO members (name) VALUES (?) ON CONFLICT (name) DO NOTHING",
-                    (member,)
-                )
-                DBConnectionWrapper.execute_commit(
-                    "INSERT OR IGNORE INTO users (name) VALUES (?)",
-                    "INSERT INTO users (name) VALUES (?) ON CONFLICT (name) DO NOTHING",
-                    (member,)
-                )
-        except Exception as e:
-            st.warning(f"雲端資料庫初始化警告: {e}")
+            return conn
     else:
         conn = sqlite3.connect(SQLITE_DB_PATH, check_same_thread=False)
-        cur = conn.cursor()
-        
-        # 建立系統設定表
-        cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('total_budget', '20100')")
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('itinerary_version', 'v2')")
-
-        # 建立成員表
-        cur.execute("CREATE TABLE IF NOT EXISTS members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-        cur.execute("CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-
-        # 寫入預設核心三人組
-        for member in DEFAULT_MEMBERS:
-            cur.execute("INSERT OR IGNORE INTO members (name) VALUES (?)", (member,))
-            cur.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (member,))
-
-        # 行程表
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS itinerary (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            day INTEGER NOT NULL,
-            time_slot TEXT NOT NULL,
-            title TEXT NOT NULL,
-            tag TEXT,
-            desc TEXT,
-            transit TEXT,
-            tip TEXT,
-            sort_order INTEGER DEFAULT 0
-        )
-        """)
-
-        # 支出表
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            day INTEGER DEFAULT 0,
-            category TEXT NOT NULL,
-            item_name TEXT NOT NULL,
-            amount_twd REAL NOT NULL,
-            amount_rmb REAL NOT NULL,
-            payment_method TEXT DEFAULT '微信支付',
-            expense_date TEXT,
-            notes TEXT,
-            user_name TEXT DEFAULT '本人',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-
-        # 檢查欄位相容性
-        cur.execute("PRAGMA table_info(expenses)")
-        existing_cols = [row[1] for row in cur.fetchall()]
-        if "user_name" not in existing_cols:
-            cur.execute("ALTER TABLE expenses ADD COLUMN user_name TEXT DEFAULT '本人'")
-
-        # 準備清單
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS checklist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_name TEXT NOT NULL,
-            is_checked INTEGER DEFAULT 0,
-            category TEXT DEFAULT '重要證件與App'
-        )
-        """)
-
-        # 預算表
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS budget_limits (
-            category TEXT PRIMARY KEY,
-            budget_twd REAL NOT NULL,
-            budget_rmb REAL NOT NULL
-        )
-        """)
-
-        conn.commit()
-        conn.close()
-
-def get_setting(key: str, default: str = "") -> str:
-    rows = DBConnectionWrapper.execute_query(
-        "SELECT value FROM settings WHERE key = ?",
-        "SELECT value FROM settings WHERE key = ?",
-        (key,)
-    )
-    return rows[0]["value"] if rows else default
-
-def set_setting(key: str, value: str):
-    if is_cloud_mode():
-        DBConnectionWrapper.execute_commit(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            (key, value)
-        )
-    else:
-        DBConnectionWrapper.execute_commit(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            params=(key, value)
-        )
-
-def get_all_members() -> List[str]:
-    rows = DBConnectionWrapper.execute_query(
-        "SELECT name FROM members ORDER BY id ASC",
-        "SELECT name FROM members ORDER BY id ASC"
-    )
-    names = [r["name"] for r in rows]
-    # 保證預設三人組都在名單中
-    for m in DEFAULT_MEMBERS:
-        if m not in names:
-            names.append(m)
-    return names
-
-def add_new_member(name: str) -> bool:
-    try:
-        if is_cloud_mode():
-            DBConnectionWrapper.execute_commit(
-                "INSERT OR IGNORE INTO members (name) VALUES (?)",
-                "INSERT INTO members (name) VALUES (?) ON CONFLICT (name) DO NOTHING",
-                (name,)
-            )
-            DBConnectionWrapper.execute_commit(
-                "INSERT OR IGNORE INTO users (name) VALUES (?)",
-                "INSERT INTO users (name) VALUES (?) ON CONFLICT (name) DO NOTHING",
-                (name,)
-            )
-        else:
-            DBConnectionWrapper.execute_commit("INSERT OR IGNORE INTO members (name) VALUES (?)", params=(name,))
-            DBConnectionWrapper.execute_commit("INSERT OR IGNORE INTO users (name) VALUES (?)", params=(name,))
-        return True
-    except Exception:
-        return False
-
-def get_expenses_by_user(user_name: str) -> List[Dict[str, Any]]:
-    return DBConnectionWrapper.execute_query(
-        "SELECT * FROM expenses WHERE user_name = ? ORDER BY day ASC, id ASC",
-        "SELECT * FROM expenses WHERE user_name = ? ORDER BY day ASC, id ASC",
-        (user_name,)
-    )
-
-def add_expense_record(day: int, category: str, item_name: str, amount_twd: float, amount_rmb: float, payment_method: str, expense_date: str, notes: str, user_name: str):
-    DBConnectionWrapper.execute_commit(
-        """
-        INSERT INTO expenses (day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, user_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        params=(day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, user_name)
-    )
-
-def update_expense_record(exp_id: int, day: int, category: str, item_name: str, amount_twd: float, amount_rmb: float, payment_method: str, expense_date: str, notes: str):
-    DBConnectionWrapper.execute_commit(
-        """
-        UPDATE expenses SET day = ?, category = ?, item_name = ?, amount_twd = ?, amount_rmb = ?, payment_method = ?, expense_date = ?, notes = ?
-        WHERE id = ?
-        """,
-        params=(day, category, item_name, amount_twd, amount_rmb, payment_method, expense_date, notes, exp_id)
-    )
-
-def delete_expense_record(exp_id: int):
-    DBConnectionWrapper.execute_commit("DELETE FROM expenses WHERE id = ?", params=(exp_id,))
-
-def clone_user_data(source_user: str, target_user: str):
-    """將來源成員的全部消費明細與預算設定同步複製到目標成員"""
-    # 複製預算
-    source_budget = get_setting(f"budget_{source_user}", "20100")
-    set_setting(f"budget_{target_user}", source_budget)
-    
-    # 複製消費明細
-    source_expenses = get_expenses_by_user(source_user)
-    # 先清除目標既有明細再匯入
-    DBConnectionWrapper.execute_commit("DELETE FROM expenses WHERE user_name = ?", params=(target_user,))
-    for exp in source_expenses:
-        add_expense_record(
-            exp.get("day", 0),
-            exp.get("category", "其他"),
-            exp.get("item_name", ""),
-            float(exp.get("amount_twd", 0.0)),
-            float(exp.get("amount_rmb", 0.0)),
-            exp.get("payment_method", "微信支付"),
-            str(exp.get("expense_date", "")),
-            exp.get("notes", ""),
-            target_user
-        )
+        conn.row_factory = sqlite3.Row
+        return conn
