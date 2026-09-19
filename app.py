@@ -26,6 +26,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "travel.db")
 
 from itinerary_data import DEFAULT_ITINERARY, get_navigation_info, build_nav_urls
+from db_cloud import is_cloud_mode
 
 def get_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -44,6 +45,9 @@ def init_db():
     )
     """)
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('total_budget', '20100')")
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('budget_本人', '20100')")
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('budget_Chris', '25000')")
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('budget_Angus', '20100')")
     conn.commit()
 
     # 1. 成員名單表 members 與相容表 users (個人帳本切換隔離，保證重啟時完整保留歷史資料)
@@ -61,14 +65,11 @@ def init_db():
     )
     """)
     
-    # 嚴格資料防護機制：只有當 members 表完全沒有任何資料時，才寫入預設成員（本人、Chris）
-    cursor.execute("SELECT COUNT(*) FROM members")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT OR IGNORE INTO members (name) VALUES ('本人')")
-        cursor.execute("INSERT OR IGNORE INTO members (name) VALUES ('Chris')")
-        cursor.execute("INSERT OR IGNORE INTO users (name) VALUES ('本人')")
-        cursor.execute("INSERT OR IGNORE INTO users (name) VALUES ('Chris')")
-        conn.commit()
+    # 嚴格資料防護機制：確保核心預設三人組（本人、Chris、Angus）必定存在
+    for def_user in ["本人", "Chris", "Angus"]:
+        cursor.execute("INSERT OR IGNORE INTO members (name) VALUES (?)", (def_user,))
+        cursor.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (def_user,))
+    conn.commit()
     
     # 行程表
     cursor.execute("""
@@ -232,11 +233,27 @@ cur.execute("CREATE TABLE IF NOT EXISTS members (id INTEGER PRIMARY KEY AUTOINCR
 user_rows = [r[0] for r in cur.execute("SELECT name FROM members ORDER BY id ASC").fetchall()]
 conn.close()
 if not user_rows:
-    user_rows = ["本人"]
+    user_rows = ["本人", "Chris", "Angus"]
 
 # 維護當前選中成員狀態
 if "active_user" not in st.session_state or st.session_state["active_user"] not in user_rows:
     st.session_state["active_user"] = user_rows[0]
+
+# 顯示當前資料庫持久化模式狀態指示
+if is_cloud_mode():
+    st.sidebar.markdown(
+        "<div style='background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; color: #10b981; font-weight: bold;'>"
+        "☁️ 雲端外部資料庫（Supabase 已連線）<br><span style='font-size: 11px; font-weight: normal; opacity: 0.9;'>資料即時雲端同步・重啟 100% 永不遺失</span>"
+        "</div>",
+        unsafe_allow_html=True
+    )
+else:
+    st.sidebar.markdown(
+        "<div style='background: rgba(59, 130, 246, 0.12); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; color: #3b82f6; font-weight: bold;'>"
+        "💾 本地持久化資料庫 (travel.db)<br><span style='font-size: 11px; font-weight: normal; opacity: 0.9;'>核心成員已永久定錨 ｜ 支援無縫升級 Supabase</span>"
+        "</div>",
+        unsafe_allow_html=True
+    )
 
 st.sidebar.markdown("### 👤 個人帳本管理")
 current_user = st.sidebar.selectbox(
