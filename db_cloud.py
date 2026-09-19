@@ -24,16 +24,23 @@ def get_cloud_db_url() -> Optional[str]:
     try:
         if hasattr(st, "secrets"):
             if "connections" in st.secrets and "postgresql" in st.secrets["connections"]:
-                return st.secrets["connections"]["postgresql"].get("url")
+                url = st.secrets["connections"]["postgresql"].get("url")
+                if url and isinstance(url, str) and url.strip():
+                    return url.strip()
             if "supabase" in st.secrets and "db_url" in st.secrets["supabase"]:
-                return st.secrets["supabase"].get("db_url")
+                url = st.secrets["supabase"].get("db_url")
+                if url and isinstance(url, str) and url.strip():
+                    return url.strip()
             if "DATABASE_URL" in st.secrets:
-                return st.secrets["DATABASE_URL"]
+                url = st.secrets["DATABASE_URL"]
+                if url and isinstance(url, str) and url.strip():
+                    return url.strip()
     except Exception:
         pass
         
     # 2. 次之從環境變數檢查
-    return os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+    url_env = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+    return url_env.strip() if url_env else None
 
 def is_cloud_mode() -> bool:
     """是否處於雲端資料庫模式"""
@@ -63,12 +70,44 @@ def adapt_sql_for_pg(sql: str) -> str:
     elif "INSERT OR REPLACE INTO" in s:
         s = s.replace("INSERT OR REPLACE INTO", "INSERT INTO")
 
-    # AUTOINCREMENT 轉換
+    # AUTOINCREMENT 轉換為 SERIAL PRIMARY KEY
     s = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'SERIAL PRIMARY KEY', s, flags=re.IGNORECASE)
+
+    # 欄位 desc TEXT 轉譯為 "desc" TEXT 避免保留關鍵字衝突
+    s = re.sub(r'\bdesc\s+TEXT\b', '"desc" TEXT', s, flags=re.IGNORECASE)
 
     # 參數問號 ? 轉譯為 %s
     s = s.replace("?", "%s")
     return s
+
+class RowAdapter:
+    """相容性 Row 物件，支援 row[0]、row['column'] 以及 desc/desc_text 雙向映射"""
+    def __init__(self, raw_row):
+        self._raw = raw_row
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            if key == "desc" and "desc" not in self._raw and "desc_text" in self._raw:
+                return self._raw["desc_text"]
+            if key == "desc_text" and "desc_text" not in self._raw and "desc" in self._raw:
+                return self._raw["desc"]
+        return self._raw[key]
+
+    def get(self, key, default=None):
+        if key == "desc" and "desc" not in self._raw and "desc_text" in self._raw:
+            return self._raw["desc_text"]
+        if key == "desc_text" and "desc_text" not in self._raw and "desc" in self._raw:
+            return self._raw["desc"]
+        return self._raw.get(key, default) if hasattr(self._raw, "get") else default
+
+    def __iter__(self):
+        return iter(self._raw)
+
+    def __len__(self):
+        return len(self._raw)
+
+    def __repr__(self):
+        return repr(self._raw)
 
 class CloudCursorWrapper:
     """包裝 psycopg2 cursor 使其介面與行為 100% 相容於 sqlite3 cursor"""
@@ -82,8 +121,9 @@ class CloudCursorWrapper:
         try:
             self._cur.execute(adapted_sql, params)
         except Exception as e:
-            # 忽視建立表時的已存在錯誤
-            if "already exists" in str(e):
+            # 忽視建立表時的已存在或重複錯誤
+            err_msg = str(e).lower()
+            if "already exists" in err_msg or "duplicate key" in err_msg:
                 pass
             else:
                 raise e
@@ -95,13 +135,16 @@ class CloudCursorWrapper:
         return self
 
     def fetchone(self):
-        return self._cur.fetchone()
+        row = self._cur.fetchone()
+        return RowAdapter(row) if row is not None else None
 
     def fetchall(self):
-        return self._cur.fetchall()
+        rows = self._cur.fetchall()
+        return [RowAdapter(r) for r in rows] if rows else []
 
     def fetchmany(self, size=None):
-        return self._cur.fetchmany(size) if size else self._cur.fetchmany()
+        rows = self._cur.fetchmany(size) if size else self._cur.fetchmany()
+        return [RowAdapter(r) for r in rows] if rows else []
 
     @property
     def rowcount(self):
@@ -112,7 +155,10 @@ class CloudCursorWrapper:
         return None
 
     def close(self):
-        self._cur.close()
+        try:
+            self._cur.close()
+        except Exception:
+            pass
 
 class CloudConnectionWrapper:
     """包裝 psycopg2 connection 使其與 sqlite3 connection 介面完全相容"""
@@ -137,10 +183,16 @@ class CloudConnectionWrapper:
         return cur.executemany(sql, seq_of_params)
 
     def commit(self):
-        self._conn.commit()
+        try:
+            self._conn.commit()
+        except Exception:
+            pass
 
     def rollback(self):
-        self._conn.rollback()
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
 
     def close(self):
         try:

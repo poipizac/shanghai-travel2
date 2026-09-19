@@ -32,6 +32,29 @@ def get_db():
     return get_compatible_db()
 
 def init_db():
+    if is_cloud_mode():
+        conn = get_db()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+            cursor.execute("CREATE TABLE IF NOT EXISTS members (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)")
+            cursor.execute("CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)")
+            
+            for def_user in ["本人", "Chris", "Angus"]:
+                cursor.execute("INSERT INTO members (name) VALUES (%s) ON CONFLICT (name) DO NOTHING", (def_user,))
+                cursor.execute("INSERT INTO users (name) VALUES (%s) ON CONFLICT (name) DO NOTHING", (def_user,))
+                
+            cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", ('total_budget', '20100'))
+            cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", ('budget_本人', '20100'))
+            cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", ('budget_Chris', '25000'))
+            cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", ('budget_Angus', '20100'))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+        return
+
     conn = get_db()
     cursor = conn.cursor()
     
